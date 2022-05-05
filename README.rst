@@ -1,5 +1,5 @@
 discord-py-api
-==========
+==============
 
 .. image:: https://discord.com/api/guilds/336642139381301249/embed.png
    :target: https://discord.gg/r3sSKJJ
@@ -44,6 +44,7 @@ Otherwise to get voice support you should run the following command:
 
     # Windows
     py -3 -m pip install -U discord-py-api[voice]
+
 
 Optional Packages
 ~~~~~~~~~~~~~~~~~~
