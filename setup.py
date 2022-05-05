@@ -66,7 +66,7 @@ packages = [
     'discord.ext.tasks',
 ]
 
-setup(name='discord.py',
+setup(name='discord-py-api',
       author='Rapptz',
       url='https://github.com/Rapptz/discord.py',
       project_urls={
