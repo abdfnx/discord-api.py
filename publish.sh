@@ -3,7 +3,7 @@
 git pull
 vim ./discord/__init__.py
 git add .
-git commit
+git commit -m "bump to $1 version"
 git push
 python3 -m build
 twine check dist/*
