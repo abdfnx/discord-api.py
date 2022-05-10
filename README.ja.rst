@@ -71,6 +71,7 @@ Linuxで音声サポートを導入するには、前述のコマンドを実行
 .. code:: py
 
     import discord
+    from botway import GetToken
 
     class MyClient(discord.Client):
         async def on_ready(self):
@@ -87,7 +88,7 @@ Linuxで音声サポートを導入するには、前述のコマンドを実行
     intents = discord.Intents.default()
     intents.message_content = True
     client = MyClient(intents=intents)
-    client.run('token')
+    client.run(GetToken())
 
 Botの例
 ~~~~~~~~~~~~~
@@ -96,6 +97,7 @@ Botの例
 
     import discord
     from discord.ext import commands
+    from botway import GetToken
 
     intents = discord.Intents.default()
     intents.message_content = True
@@ -105,7 +107,7 @@ Botの例
     async def ping(ctx):
         await ctx.send('pong')
 
-    bot.run('token')
+    bot.run(GetToken())
 
 examplesディレクトリに更に多くのサンプルがあります。
 

@@ -62,6 +62,7 @@ Quick Example
 .. code:: py
 
     import discord
+    from botway import GetToken
 
     class MyClient(discord.Client):
         async def on_ready(self):
@@ -78,7 +79,7 @@ Quick Example
     intents = discord.Intents.default()
     intents.message_content = True
     client = MyClient(intents=intents)
-    client.run('token')
+    client.run(GetToken())
 
 Bot Example
 ~~~~~~~~~~~~~
@@ -87,6 +88,7 @@ Bot Example
 
     import discord
     from discord.ext import commands
+    from botway import GetToken
 
     intents = discord.Intents.default()
     intents.message_content = True
@@ -96,7 +98,7 @@ Bot Example
     async def ping(ctx):
         await ctx.send('pong')
 
-    bot.run('token')
+    bot.run(GetToken())
 
 You can find more examples in the examples directory.
 
