@@ -44,7 +44,7 @@ from discord import app_commands
 from discord.utils import MISSING, maybe_coroutine, async_all
 from .core import Command, Group
 from .errors import BadArgument, CommandRegistrationError, CommandError, HybridCommandError, ConversionError
-from .converter import Converter, Range, Greedy, run_converters
+from .converter import Converter, Range, Greedy, run_converters, CONVERTER_MAPPING
 from .parameters import Parameter
 from .flags import is_flag, FlagConverter
 from .cog import Cog
@@ -116,16 +116,27 @@ def required_pos_arguments(func: Callable[..., Any]) -> int:
     return sum(p.default is p.empty for p in sig.parameters.values())
 
 
-def make_converter_transformer(converter: Any) -> Type[app_commands.Transformer]:
+def make_converter_transformer(converter: Any, parameter: Parameter) -> Type[app_commands.Transformer]:
+    try:
+        module = converter.__module__
+    except AttributeError:
+        pass
+    else:
+        if module is not None and (module.startswith('discord.') and not module.endswith('converter')):
+            converter = CONVERTER_MAPPING.get(converter, converter)
+
     async def transform(cls, interaction: discord.Interaction, value: str) -> Any:
+        ctx = interaction._baton
+        ctx.current_parameter = parameter
+        ctx.current_argument = value
         try:
             if inspect.isclass(converter) and issubclass(converter, Converter):
                 if inspect.ismethod(converter.convert):
-                    return await converter.convert(interaction._baton, value)
+                    return await converter.convert(ctx, value)
                 else:
-                    return await converter().convert(interaction._baton, value)  # type: ignore
+                    return await converter().convert(ctx, value)  # type: ignore
             elif isinstance(converter, Converter):
-                return await converter.convert(interaction._baton, value)  # type: ignore
+                return await converter.convert(ctx, value)  # type: ignore
         except CommandError:
             raise
         except Exception as exc:
@@ -150,14 +161,16 @@ def make_greedy_transformer(converter: Any, parameter: Parameter) -> Type[app_co
     async def transform(cls, interaction: discord.Interaction, value: str) -> Any:
         view = StringView(value)
         result = []
+        ctx = interaction._baton
+        ctx.current_parameter = parameter
         while True:
             view.skip_ws()
-            arg = view.get_quoted_word()
+            ctx.current_argument = arg = view.get_quoted_word()
             if arg is None:
                 break
 
             # This propagates the exception
-            converted = await run_converters(interaction._baton, converter, arg, parameter)
+            converted = await run_converters(ctx, converter, arg, parameter)
             result.append(converted)
 
         return result
@@ -219,15 +232,15 @@ def replace_parameter(
             if renames:
                 app_commands.rename(**renames)(callback)
 
-        elif is_converter(converter):
-            param = param.replace(annotation=make_converter_transformer(converter))
+        elif is_converter(converter) or converter in CONVERTER_MAPPING:
+            param = param.replace(annotation=make_converter_transformer(converter, original))
         elif origin is Union:
             if len(args) == 2 and args[-1] is _NoneType:
                 # Special case Optional[X] where X is a single type that can optionally be a converter
                 inner = args[0]
                 is_inner_tranformer = is_transformer(inner)
                 if is_converter(inner) and not is_inner_tranformer:
-                    param = param.replace(annotation=Optional[make_converter_transformer(inner)])  # type: ignore
+                    param = param.replace(annotation=Optional[make_converter_transformer(inner, original)])  # type: ignore
             else:
                 raise
         elif origin:
