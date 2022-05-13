@@ -1,6 +1,6 @@
 #!/bin/bash
 
-git pull
+gh repo sync
 vim ./discord/__init__.py
 git add .
 git commit -m "bump to $1 version"
