@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 import asyncio
-import json
 import re
 
 from urllib.parse import quote as urlquote
@@ -44,7 +43,7 @@ from ..user import BaseUser, User
 from ..flags import MessageFlags
 from ..asset import Asset
 from ..partial_emoji import PartialEmoji
-from ..http import Route, handle_message_parameters, MultipartParameters, HTTPClient
+from ..http import Route, handle_message_parameters, MultipartParameters, HTTPClient, json_or_text
 from ..mixins import Hashable
 from ..channel import TextChannel, PartialMessageable
 from ..file import File
@@ -182,9 +181,7 @@ class AsyncWebhookAdapter:
                             url,
                             response.status,
                         )
-                        data = (await response.text(encoding='utf-8')) or None
-                        if data and response.headers['Content-Type'] == 'application/json':
-                            data = json.loads(data)
+                        data = await json_or_text(response)
 
                         remaining = response.headers.get('X-Ratelimit-Remaining')
                         if remaining == '0' and response.status != 429:
@@ -1517,6 +1514,7 @@ class Webhook(BaseWebhook):
         allowed_mentions: AllowedMentions = MISSING,
         view: View = MISSING,
         thread: Snowflake = MISSING,
+        thread_name: str = MISSING,
         wait: Literal[True],
         suppress_embeds: bool = MISSING,
     ) -> WebhookMessage:
@@ -1538,6 +1536,7 @@ class Webhook(BaseWebhook):
         allowed_mentions: AllowedMentions = MISSING,
         view: View = MISSING,
         thread: Snowflake = MISSING,
+        thread_name: str = MISSING,
         wait: Literal[False] = ...,
         suppress_embeds: bool = MISSING,
     ) -> None:
@@ -1558,6 +1557,7 @@ class Webhook(BaseWebhook):
         allowed_mentions: AllowedMentions = MISSING,
         view: View = MISSING,
         thread: Snowflake = MISSING,
+        thread_name: str = MISSING,
         wait: bool = False,
         suppress_embeds: bool = False,
     ) -> Optional[WebhookMessage]:
@@ -1629,6 +1629,13 @@ class Webhook(BaseWebhook):
             The thread to send this webhook to.
 
             .. versionadded:: 2.0
+        thread_name: :class:`str`
+            The thread name to create with this webhook if the webhook belongs
+            to a :class:`~discord.ForumChannel`. Note that this is mutually
+            exclusive with the ``thread`` parameter, as this will create a
+            new thread with the given name.
+
+            .. versionadded:: 2.0
         suppress_embeds: :class:`bool`
             Whether to suppress embeds for the message. This sends the message without any embeds if set to ``True``.
 
@@ -1643,7 +1650,8 @@ class Webhook(BaseWebhook):
         Forbidden
             The authorization token for the webhook is incorrect.
         TypeError
-            You specified both ``embed`` and ``embeds`` or ``file`` and ``files``.
+            You specified both ``embed`` and ``embeds`` or ``file`` and ``files``
+            or ``thread`` and ``thread_name``.
         ValueError
             The length of ``embeds`` was invalid, there was no token
             associated with this webhook or ``ephemeral`` was passed
@@ -1686,6 +1694,9 @@ class Webhook(BaseWebhook):
             if ephemeral is True and view.timeout is None:
                 view.timeout = 15 * 60.0
 
+        if thread_name is not MISSING and thread is not MISSING:
+            raise TypeError('Cannot mix thread_name and thread keyword arguments.')
+
         params = handle_message_parameters(
             content=content,
             username=username,
@@ -1697,6 +1708,7 @@ class Webhook(BaseWebhook):
             embeds=embeds,
             flags=flags,
             view=view,
+            thread_name=thread_name,
             allowed_mentions=allowed_mentions,
             previous_allowed_mentions=previous_mentions,
         )
