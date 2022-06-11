@@ -29,8 +29,8 @@ discord-py-api は機能豊富かつモダンで使いやすい、非同期処�
 
 .. code:: sh
 
-    # Linux/OS X
-    python3 -m pip install -U discord-py-api
+    # Linux/macOS
+    python3 -m pip install -U discord.py
 
     # Windows
     py -3 -m pip install -U discord-py-api
@@ -39,7 +39,7 @@ discord-py-api は機能豊富かつモダンで使いやすい、非同期処�
 
 .. code:: sh
 
-    # Linux/OS X
+    # Linux/macOS
     python3 -m pip install -U discord-py-api[voice]
 
     # Windows
