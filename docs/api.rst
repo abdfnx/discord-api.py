@@ -1589,6 +1589,12 @@ of :class:`enum.Enum`.
         The system message denoting that a context menu command was executed.
 
         .. versionadded:: 2.0
+    .. attribute:: auto_moderation_action
+
+        The system message sent when an AutoMod rule is triggered. This is only
+        sent if the rule is configured to sent an alert when triggered.
+
+        .. versionadded:: 2.0
 
 .. class:: UserFlags
 
@@ -3077,7 +3083,7 @@ of :class:`enum.Enum`.
 
 .. class:: AutoModRuleTriggerType
 
-    Represents the trigger type of an auto mod rule.
+    Represents the trigger type of an automod rule.
 
     .. versionadded:: 2.0
 
@@ -3099,7 +3105,7 @@ of :class:`enum.Enum`.
 
 .. class:: AutoModRuleEventType
 
-    Represents the event type of an auto mod rule.
+    Represents the event type of an automod rule.
 
     .. versionadded:: 2.0
 
@@ -3109,7 +3115,7 @@ of :class:`enum.Enum`.
 
 .. class:: AutoModRuleActionType
 
-    Represents the action type of an auto mod rule.
+    Represents the action type of an automod rule.
 
     .. versionadded:: 2.0
 
@@ -3714,9 +3720,9 @@ AuditLogDiff
 
     .. attribute:: app_command_permissions
 
-        The permissions of the app command.
+        List of permissions for the app command.
 
-        :type: :class:`~discord.app_commands.AppCommandPermissions`
+        :type: List[:class:`~discord.app_commands.AppCommandPermissions`]
 
     .. attribute:: enabled
 
@@ -3761,7 +3767,7 @@ AuditLogDiff
         :type: List[:class:`str`]
 
 .. this is currently missing the following keys: reason and application_id
-   I'm not sure how to about porting these
+   I'm not sure how to port these
 
 Webhook Support
 ------------------
