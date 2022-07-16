@@ -98,13 +98,13 @@ DISCORD_EPOCH = 1420070400000
 class _MissingSentinel:
     __slots__ = ()
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         return False
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return False
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return 0
 
     def __repr__(self):
@@ -115,7 +115,7 @@ MISSING: Any = _MissingSentinel()
 
 
 class _cached_property:
-    def __init__(self, function):
+    def __init__(self, function) -> None:
         self.function = function
         self.__doc__ = getattr(function, '__doc__')
 
@@ -398,12 +398,12 @@ async def _afind(predicate: Callable[[T], Any], iterable: AsyncIterable[T], /) -
 
 
 @overload
-def find(predicate: Callable[[T], Any], iterable: Iterable[T], /) -> Optional[T]:
+def find(predicate: Callable[[T], Any], iterable: AsyncIterable[T], /) -> Coro[Optional[T]]:
     ...
 
 
 @overload
-def find(predicate: Callable[[T], Any], iterable: AsyncIterable[T], /) -> Coro[Optional[T]]:
+def find(predicate: Callable[[T], Any], iterable: Iterable[T], /) -> Optional[T]:
     ...
 
 
@@ -437,9 +437,9 @@ def find(predicate: Callable[[T], Any], iterable: _Iter[T], /) -> Union[Optional
     """
 
     return (
-        _find(predicate, iterable)  # type: ignore
-        if hasattr(iterable, '__iter__')  # isinstance(iterable, collections.abc.Iterable) is too slow
-        else _afind(predicate, iterable)  # type: ignore
+        _afind(predicate, iterable)  # type: ignore
+        if hasattr(iterable, '__aiter__')  # isinstance(iterable, collections.abc.AsyncIterable) is too slow
+        else _find(predicate, iterable)  # type: ignore
     )
 
 
@@ -484,12 +484,12 @@ async def _aget(iterable: AsyncIterable[T], /, **attrs: Any) -> Optional[T]:
 
 
 @overload
-def get(iterable: Iterable[T], /, **attrs: Any) -> Optional[T]:
+def get(iterable: AsyncIterable[T], /, **attrs: Any) -> Coro[Optional[T]]:
     ...
 
 
 @overload
-def get(iterable: AsyncIterable[T], /, **attrs: Any) -> Coro[Optional[T]]:
+def get(iterable: Iterable[T], /, **attrs: Any) -> Optional[T]:
     ...
 
 
@@ -553,9 +553,9 @@ def get(iterable: _Iter[T], /, **attrs: Any) -> Union[Optional[T], Coro[Optional
     """
 
     return (
-        _get(iterable, **attrs)  # type: ignore
-        if hasattr(iterable, '__iter__')  # isinstance(iterable, collections.abc.Iterable) is too slow
-        else _aget(iterable, **attrs)  # type: ignore
+        _aget(iterable, **attrs)  # type: ignore
+        if hasattr(iterable, '__aiter__')  # isinstance(iterable, collections.abc.AsyncIterable) is too slow
+        else _get(iterable, **attrs)  # type: ignore
     )
 
 

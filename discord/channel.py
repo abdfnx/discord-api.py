@@ -2381,7 +2381,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         return Webhook.from_state(data, state=self._state)
 
 
-class DMChannel(discord.abc.Messageable, Hashable):
+class DMChannel(discord.abc.Messageable, discord.abc.PrivateChannel, Hashable):
     """Represents a Discord direct message channel.
 
     .. container:: operations
@@ -2498,12 +2498,7 @@ class DMChannel(discord.abc.Messageable, Hashable):
         :class:`Permissions`
             The resolved permissions.
         """
-
-        base = Permissions.text()
-        base.read_messages = True
-        base.send_tts_messages = False
-        base.manage_messages = False
-        return base
+        return Permissions._dm_permissions()
 
     def get_partial_message(self, message_id: int, /) -> PartialMessage:
         """Creates a :class:`PartialMessage` from the message ID.
@@ -2533,7 +2528,7 @@ class DMChannel(discord.abc.Messageable, Hashable):
         return PartialMessage(channel=self, id=message_id)
 
 
-class GroupChannel(discord.abc.Messageable, Hashable):
+class GroupChannel(discord.abc.Messageable, discord.abc.PrivateChannel, Hashable):
     """Represents a Discord group channel.
 
     .. container:: operations
@@ -2671,10 +2666,7 @@ class GroupChannel(discord.abc.Messageable, Hashable):
             The resolved permissions for the user.
         """
 
-        base = Permissions.text()
-        base.read_messages = True
-        base.send_tts_messages = False
-        base.manage_messages = False
+        base = Permissions._dm_permissions()
         base.mention_everyone = True
 
         if obj.id == self.owner_id:
