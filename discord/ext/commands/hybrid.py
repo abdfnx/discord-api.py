@@ -116,18 +116,24 @@ def required_pos_arguments(func: Callable[..., Any]) -> int:
     return sum(p.default is p.empty for p in sig.parameters.values())
 
 
-def make_converter_transformer(converter: Any, parameter: Parameter) -> Type[app_commands.Transformer]:
-    try:
-        module = converter.__module__
-    except AttributeError:
-        pass
-    else:
-        if module is not None and (module.startswith('discord.') and not module.endswith('converter')):
-            converter = CONVERTER_MAPPING.get(converter, converter)
+class ConverterTransformer(app_commands.Transformer):
+    def __init__(self, converter: Any, parameter: Parameter) -> None:
+        super().__init__()
+        self.converter: Any = converter
+        self.parameter: Parameter = parameter
 
-    async def transform(cls, interaction: discord.Interaction, value: str) -> Any:
+        try:
+            module = converter.__module__
+        except AttributeError:
+            pass
+        else:
+            if module is not None and (module.startswith('discord.') and not module.endswith('converter')):
+                self.converter = CONVERTER_MAPPING.get(converter, converter)
+
+    async def transform(self, interaction: discord.Interaction, value: str) -> Any:
         ctx = interaction._baton
-        ctx.current_parameter = parameter
+        converter = self.converter
+        ctx.current_parameter = self.parameter
         ctx.current_argument = value
         try:
             if inspect.isclass(converter) and issubclass(converter, Converter):
@@ -136,33 +142,40 @@ def make_converter_transformer(converter: Any, parameter: Parameter) -> Type[app
                 else:
                     return await converter().convert(ctx, value)  # type: ignore
             elif isinstance(converter, Converter):
-                return await converter.convert(ctx, value)  # type: ignore
+                return await converter.convert(ctx, value)
         except CommandError:
             raise
         except Exception as exc:
             raise ConversionError(converter, exc) from exc  # type: ignore
 
-    return type('ConverterTransformer', (app_commands.Transformer,), {'transform': classmethod(transform)})
 
+class CallableTransformer(app_commands.Transformer):
+    def __init__(self, func: Callable[[str], Any]) -> None:
+        super().__init__()
+        self.func: Callable[[str], Any] = func
 
-def make_callable_transformer(func: Callable[[str], Any]) -> Type[app_commands.Transformer]:
-    async def transform(cls, interaction: discord.Interaction, value: str) -> Any:
+    async def transform(self, interaction: discord.Interaction, value: str) -> Any:
         try:
-            return func(value)
+            return self.func(value)
         except CommandError:
             raise
         except Exception as exc:
-            raise BadArgument(f'Converting to "{func.__name__}" failed') from exc
-
-    return type('CallableTransformer', (app_commands.Transformer,), {'transform': classmethod(transform)})
+            raise BadArgument(f'Converting to "{self.func.__name__}" failed') from exc
 
 
-def make_greedy_transformer(converter: Any, parameter: Parameter) -> Type[app_commands.Transformer]:
-    async def transform(cls, interaction: discord.Interaction, value: str) -> Any:
+class GreedyTransformer(app_commands.Transformer):
+    def __init__(self, converter: Any, parameter: Parameter) -> None:
+        super().__init__()
+        self.converter: Any = converter
+        self.parameter: Parameter = parameter
+
+    async def transform(self, interaction: discord.Interaction, value: str) -> Any:
         view = StringView(value)
         result = []
         ctx = interaction._baton
-        ctx.current_parameter = parameter
+        ctx.current_parameter = parameter = self.parameter
+        converter = self.converter
+
         while True:
             view.skip_ws()
             ctx.current_argument = arg = view.get_quoted_word()
@@ -174,8 +187,6 @@ def make_greedy_transformer(converter: Any, parameter: Parameter) -> Type[app_co
             result.append(converted)
 
         return result
-
-    return type('GreedyTransformer', (app_commands.Transformer,), {'transform': classmethod(transform)})
 
 
 def replace_parameter(
@@ -203,7 +214,7 @@ def replace_parameter(
             if inner is discord.Attachment:
                 raise TypeError('discord.Attachment with Greedy is not supported in hybrid commands')
 
-            param = param.replace(annotation=make_greedy_transformer(inner, original))
+            param = param.replace(annotation=GreedyTransformer(inner, original))
         elif is_flag(converter):
             callback.__hybrid_command_flag__ = (param.name, converter)
             descriptions = {}
@@ -233,14 +244,14 @@ def replace_parameter(
                 app_commands.rename(**renames)(callback)
 
         elif is_converter(converter) or converter in CONVERTER_MAPPING:
-            param = param.replace(annotation=make_converter_transformer(converter, original))
+            param = param.replace(annotation=ConverterTransformer(converter, original))
         elif origin is Union:
             if len(args) == 2 and args[-1] is _NoneType:
                 # Special case Optional[X] where X is a single type that can optionally be a converter
                 inner = args[0]
                 is_inner_transformer = is_transformer(inner)
                 if is_converter(inner) and not is_inner_transformer:
-                    param = param.replace(annotation=Optional[make_converter_transformer(inner, original)])  # type: ignore
+                    param = param.replace(annotation=Optional[ConverterTransformer(inner, original)])  # type: ignore
             else:
                 raise
         elif origin:
@@ -250,7 +261,7 @@ def replace_parameter(
             param_count = required_pos_arguments(converter)
             if param_count != 1:
                 raise
-            param = param.replace(annotation=make_callable_transformer(converter))
+            param = param.replace(annotation=CallableTransformer(converter))
 
     return param
 
@@ -419,10 +430,12 @@ class HybridAppCommand(discord.app_commands.Command[CogT, P, T]):
         command = self.wrapped
         bot.dispatch('command', ctx)
         value = None
+        callback_completed = False
         try:
             await command.prepare(ctx)
             # This lies and just always passes a Context instead of an Interaction.
             value = await self._do_call(ctx, ctx.kwargs)  # type: ignore
+            callback_completed = True
         except app_commands.CommandSignatureMismatch:
             raise
         except (app_commands.TransformerError, app_commands.CommandInvokeError) as e:
@@ -442,7 +455,8 @@ class HybridAppCommand(discord.app_commands.Command[CogT, P, T]):
             if command._max_concurrency is not None:
                 await command._max_concurrency.release(ctx.message)
 
-            await command.call_after_hooks(ctx)
+            if callback_completed:
+                await command.call_after_hooks(ctx)
 
         if not ctx.command_failed:
             bot.dispatch('command_completion', ctx)
