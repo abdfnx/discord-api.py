@@ -554,6 +554,7 @@ class Command(_BaseCommand, Generic[CogT, P, T]):
     def _ensure_assignment_on_copy(self, other: Self) -> Self:
         other._before_invoke = self._before_invoke
         other._after_invoke = self._after_invoke
+        other.extras = self.extras
         if self.checks != other.checks:
             other.checks = self.checks.copy()
         if self._buckets.valid and not other._buckets.valid:
@@ -888,7 +889,7 @@ class Command(_BaseCommand, Generic[CogT, P, T]):
 
         if self._max_concurrency is not None:
             # For this application, context can be duck-typed as a Message
-            await self._max_concurrency.acquire(ctx)  # type: ignore
+            await self._max_concurrency.acquire(ctx)
 
         try:
             if self.cooldown_after_parsing:
@@ -901,7 +902,7 @@ class Command(_BaseCommand, Generic[CogT, P, T]):
             await self.call_before_hooks(ctx)
         except:
             if self._max_concurrency is not None:
-                await self._max_concurrency.release(ctx)  # type: ignore
+                await self._max_concurrency.release(ctx)
             raise
 
     def is_on_cooldown(self, ctx: Context[BotT], /) -> bool:
@@ -2426,7 +2427,7 @@ def cooldown(
         if isinstance(func, Command):
             func._buckets = CooldownMapping(Cooldown(rate, per), type)
         else:
-            func.__commands_cooldown__ = CooldownMapping(Cooldown(rate, per), type)  # type: ignore # typevar cannot be inferred without annotation
+            func.__commands_cooldown__ = CooldownMapping(Cooldown(rate, per), type)
         return func
 
     return decorator  # type: ignore

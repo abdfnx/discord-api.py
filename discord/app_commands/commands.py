@@ -48,10 +48,11 @@ from textwrap import TextWrapper
 
 import re
 
-from ..enums import AppCommandOptionType, AppCommandType
+from ..enums import AppCommandOptionType, AppCommandType, Locale
 from .models import Choice
 from .transformers import annotation_to_parameter, CommandParameter, NoneType
 from .errors import AppCommandError, CheckFailure, CommandInvokeError, CommandSignatureMismatch, CommandAlreadyRegistered
+from .translator import TranslationContext, Translator, locale_str
 from ..message import Message
 from ..user import User
 from ..member import Member
@@ -281,18 +282,21 @@ def _populate_descriptions(params: Dict[str, CommandParameter], descriptions: Di
             param.description = '…'
             continue
 
-        if not isinstance(description, str):
+        if not isinstance(description, (str, locale_str)):
             raise TypeError('description must be a string')
 
-        param.description = _shorten(description)
+        if isinstance(description, str):
+            param.description = _shorten(description)
+        else:
+            param.description = description
 
     if descriptions:
         first = next(iter(descriptions))
         raise TypeError(f'unknown parameter given: {first}')
 
 
-def _populate_renames(params: Dict[str, CommandParameter], renames: Dict[str, str]) -> None:
-    rename_map: Dict[str, str] = {}
+def _populate_renames(params: Dict[str, CommandParameter], renames: Dict[str, Union[str, locale_str]]) -> None:
+    rename_map: Dict[str, Union[str, locale_str]] = {}
 
     # original name to renamed name
 
@@ -306,7 +310,11 @@ def _populate_renames(params: Dict[str, CommandParameter], renames: Dict[str, st
         if name in rename_map:
             raise ValueError(f'{new_name} is already used')
 
-        new_name = validate_name(new_name)
+        if isinstance(new_name, str):
+            new_name = validate_name(new_name)
+        else:
+            validate_name(new_name.message)
+
         rename_map[name] = new_name
         params[name]._rename = new_name
 
@@ -461,6 +469,32 @@ class Command(Generic[GroupT, P, T]):
 
     .. versionadded:: 2.0
 
+    Parameters
+    -----------
+    name: Union[:class:`str`, :class:`locale_str`]
+        The name of the application command.
+    description: Union[:class:`str`, :class:`locale_str`]
+        The description of the application command. This shows up in the UI to describe
+        the application command.
+    callback: :ref:`coroutine <coroutine>`
+        The coroutine that is executed when the command is called.
+    auto_locale_strings: :class:`bool`
+        If this is set to ``True``, then all translatable strings will implicitly
+        be wrapped into :class:`locale_str` rather than :class:`str`. This could
+        avoid some repetition and be more ergonomic for certain defaults such
+        as default command names, command descriptions, and parameter names.
+        Defaults to ``False``.
+    nsfw: :class:`bool`
+        Whether the command is NSFW and should only work in NSFW channels.
+        Defaults to ``False``.
+
+        Due to a Discord limitation, this does not work on subcommands.
+    parent: Optional[:class:`Group`]
+        The parent application command. ``None`` if there isn't one.
+    extras: :class:`dict`
+        A dictionary that can be used to store extraneous data.
+        The library will not touch any values or keys within this dictionary.
+
     Attributes
     ------------
     name: :class:`str`
@@ -483,12 +517,10 @@ class Command(Generic[GroupT, P, T]):
         Due to a Discord limitation, this does not work on subcommands.
     guild_only: :class:`bool`
         Whether the command should only be usable in guild contexts.
-        Defaults to ``False``.
 
         Due to a Discord limitation, this does not work on subcommands.
     nsfw: :class:`bool`
         Whether the command is NSFW and should only work in NSFW channels.
-        Defaults to ``False``.
 
         Due to a Discord limitation, this does not work on subcommands.
     parent: Optional[:class:`Group`]
@@ -501,16 +533,23 @@ class Command(Generic[GroupT, P, T]):
     def __init__(
         self,
         *,
-        name: str,
-        description: str,
+        name: Union[str, locale_str],
+        description: Union[str, locale_str],
         callback: CommandCallback[GroupT, P, T],
         nsfw: bool = False,
         parent: Optional[Group] = None,
         guild_ids: Optional[List[int]] = None,
+        auto_locale_strings: bool = False,
         extras: Dict[Any, Any] = MISSING,
     ):
+        name, locale = (name.message, name) if isinstance(name, locale_str) else (name, None)
         self.name: str = validate_name(name)
+        self._locale_name: Optional[locale_str] = locale
+        description, locale = (
+            (description.message, description) if isinstance(description, locale_str) else (description, None)
+        )
         self.description: str = description
+        self._locale_description: Optional[locale_str] = locale
         self._attr: Optional[str] = None
         self._callback: CommandCallback[GroupT, P, T] = callback
         self.parent: Optional[Group] = parent
@@ -540,6 +579,18 @@ class Command(Generic[GroupT, P, T]):
         if self._guild_ids is not None and self.parent is not None:
             raise ValueError('child commands cannot have default guilds set, consider setting them in the parent instead')
 
+        if auto_locale_strings:
+            self._convert_to_locale_strings()
+
+    def _convert_to_locale_strings(self) -> None:
+        if self._locale_name is None:
+            self._locale_name = locale_str(self.name)
+        if self._locale_description is None:
+            self._locale_description = locale_str(self.description)
+
+        for param in self._params.values():
+            param._convert_to_locale_strings()
+
     def __set_name__(self, owner: Type[Any], name: str) -> None:
         self._attr = name
 
@@ -561,9 +612,11 @@ class Command(Generic[GroupT, P, T]):
         cls = self.__class__
         copy = cls.__new__(cls)
         copy.name = self.name
+        copy._locale_name = self._locale_name
         copy._guild_ids = self._guild_ids
         copy.checks = self.checks
         copy.description = self.description
+        copy._locale_description = self._locale_description
         copy.default_permissions = self.default_permissions
         copy.guild_only = self.guild_only
         copy.nsfw = self.nsfw
@@ -580,6 +633,28 @@ class Command(Generic[GroupT, P, T]):
             setattr(copy.binding, copy._attr, copy)
 
         return copy
+
+    async def get_translated_payload(self, translator: Translator) -> Dict[str, Any]:
+        base = self.to_dict()
+        name_localizations: Dict[str, str] = {}
+        description_localizations: Dict[str, str] = {}
+        for locale in Locale:
+            if self._locale_name:
+                translation = await translator._checked_translate(self._locale_name, locale, TranslationContext.command_name)
+                if translation is not None:
+                    name_localizations[locale.value] = translation
+
+            if self._locale_description:
+                translation = await translator._checked_translate(
+                    self._locale_description, locale, TranslationContext.command_description
+                )
+                if translation is not None:
+                    description_localizations[locale.value] = translation
+
+        base['name_localizations'] = name_localizations
+        base['description_localizations'] = description_localizations
+        base['options'] = [await param.get_translated_payload(translator) for param in self._params.values()]
+        return base
 
     def to_dict(self) -> Dict[str, Any]:
         # If we have a parent then our type is a subcommand
@@ -926,6 +1001,28 @@ class ContextMenu:
 
     .. versionadded:: 2.0
 
+    Parameters
+    -----------
+    name: Union[:class:`str`, :class:`locale_str`]
+        The name of the context menu.
+    callback: :ref:`coroutine <coroutine>`
+        The coroutine that is executed when the command is called.
+    type: :class:`.AppCommandType`
+        The type of context menu application command. By default, this is inferred
+        by the parameter of the callback.
+    auto_locale_strings: :class:`bool`
+        If this is set to ``True``, then all translatable strings will implicitly
+        be wrapped into :class:`locale_str` rather than :class:`str`. This could
+        avoid some repetition and be more ergonomic for certain defaults such
+        as default command names, command descriptions, and parameter names.
+        Defaults to ``False``.
+    nsfw: :class:`bool`
+        Whether the command is NSFW and should only work in NSFW channels.
+        Defaults to ``False``.
+    extras: :class:`dict`
+        A dictionary that can be used to store extraneous data.
+        The library will not touch any values or keys within this dictionary.
+
     Attributes
     ------------
     name: :class:`str`
@@ -958,14 +1055,17 @@ class ContextMenu:
     def __init__(
         self,
         *,
-        name: str,
+        name: Union[str, locale_str],
         callback: ContextMenuCallback,
         type: AppCommandType = MISSING,
         nsfw: bool = False,
         guild_ids: Optional[List[int]] = None,
+        auto_locale_strings: bool = False,
         extras: Dict[Any, Any] = MISSING,
     ):
+        name, locale = (name.message, name) if isinstance(name, locale_str) else (name, None)
         self.name: str = validate_context_menu_name(name)
+        self._locale_name: Optional[locale_str] = locale
         self._callback: ContextMenuCallback = callback
         (param, annotation, actual_type) = _get_context_menu_parameter(callback)
         if type is MISSING:
@@ -988,6 +1088,10 @@ class ContextMenu:
         self.checks: List[Check] = getattr(callback, '__discord_app_commands_checks__', [])
         self.extras: Dict[Any, Any] = extras or {}
 
+        if auto_locale_strings:
+            if self._locale_name is None:
+                self._locale_name = locale_str(self.name)
+
     @property
     def callback(self) -> ContextMenuCallback:
         """:ref:`coroutine <coroutine>`: The coroutine that is executed when the context menu is called."""
@@ -997,6 +1101,18 @@ class ContextMenu:
     def qualified_name(self) -> str:
         """:class:`str`: Returns the fully qualified command name."""
         return self.name
+
+    async def get_translated_payload(self, translator: Translator) -> Dict[str, Any]:
+        base = self.to_dict()
+        if self._locale_name:
+            name_localizations: Dict[str, str] = {}
+            for locale in Locale:
+                translation = await translator._checked_translate(self._locale_name, locale, TranslationContext.command_name)
+                if translation is not None:
+                    name_localizations[locale.value] = translation
+
+            base['name_localizations'] = name_localizations
+        return base
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -1103,15 +1219,21 @@ class Group:
 
     .. versionadded:: 2.0
 
-    Attributes
-    ------------
-    name: :class:`str`
+    Parameters
+    -----------
+    name: Union[:class:`str`, :class:`locale_str`]
         The name of the group. If not given, it defaults to a lower-case
         kebab-case version of the class name.
-    description: :class:`str`
+    description: Union[:class:`str`, :class:`locale_str`]
         The description of the group. This shows up in the UI to describe
         the group. If not given, it defaults to the docstring of the
         class shortened to 100 characters.
+    auto_locale_strings: :class:`bool`
+        If this is set to ``True``, then all translatable strings will implicitly
+        be wrapped into :class:`locale_str` rather than :class:`str`. This could
+        avoid some repetition and be more ergonomic for certain defaults such
+        as default command names, command descriptions, and parameter names.
+        Defaults to ``False``.
     default_permissions: Optional[:class:`~discord.Permissions`]
         The default permissions that can execute this group on Discord. Note
         that server administrators can override this value in the client.
@@ -1130,6 +1252,34 @@ class Group:
 
         Due to a Discord limitation, this does not work on subcommands.
     parent: Optional[:class:`Group`]
+        The parent application command. ``None`` if there isn't one.
+    extras: :class:`dict`
+        A dictionary that can be used to store extraneous data.
+        The library will not touch any values or keys within this dictionary.
+
+    Attributes
+    ------------
+    name: :class:`str`
+        The name of the group.
+    description: :class:`str`
+        The description of the group. This shows up in the UI to describe
+        the group.
+    default_permissions: Optional[:class:`~discord.Permissions`]
+        The default permissions that can execute this group on Discord. Note
+        that server administrators can override this value in the client.
+        Setting an empty permissions field will disallow anyone except server
+        administrators from using the command in a guild.
+
+        Due to a Discord limitation, this does not work on subcommands.
+    guild_only: :class:`bool`
+        Whether the group should only be usable in guild contexts.
+
+        Due to a Discord limitation, this does not work on subcommands.
+    nsfw: :class:`bool`
+        Whether the command is NSFW and should only work in NSFW channels.
+
+        Due to a Discord limitation, this does not work on subcommands.
+    parent: Optional[:class:`Group`]
         The parent group. ``None`` if there isn't one.
     extras: :class:`dict`
         A dictionary that can be used to store extraneous data.
@@ -1140,6 +1290,8 @@ class Group:
     __discord_app_commands_skip_init_binding__: bool = False
     __discord_app_commands_group_name__: str = MISSING
     __discord_app_commands_group_description__: str = MISSING
+    __discord_app_commands_group_locale_name__: Optional[locale_str] = None
+    __discord_app_commands_group_locale_description__: Optional[locale_str] = None
     __discord_app_commands_group_nsfw__: bool = False
     __discord_app_commands_guild_only__: bool = MISSING
     __discord_app_commands_default_permissions__: Optional[Permissions] = MISSING
@@ -1151,8 +1303,8 @@ class Group:
     def __init_subclass__(
         cls,
         *,
-        name: str = MISSING,
-        description: str = MISSING,
+        name: Union[str, locale_str] = MISSING,
+        description: Union[str, locale_str] = MISSING,
         guild_only: bool = MISSING,
         nsfw: bool = False,
         default_permissions: Optional[Permissions] = MISSING,
@@ -1175,16 +1327,22 @@ class Group:
 
         if name is MISSING:
             cls.__discord_app_commands_group_name__ = validate_name(_to_kebab_case(cls.__name__))
-        else:
+        elif isinstance(name, str):
             cls.__discord_app_commands_group_name__ = validate_name(name)
+        else:
+            cls.__discord_app_commands_group_name__ = validate_name(name.message)
+            cls.__discord_app_commands_group_locale_name__ = name
 
         if description is MISSING:
             if cls.__doc__ is None:
                 cls.__discord_app_commands_group_description__ = '…'
             else:
                 cls.__discord_app_commands_group_description__ = _shorten(cls.__doc__)
-        else:
+        elif isinstance(description, str):
             cls.__discord_app_commands_group_description__ = description
+        else:
+            cls.__discord_app_commands_group_description__ = description.message
+            cls.__discord_app_commands_group_locale_description__ = description
 
         if guild_only is not MISSING:
             cls.__discord_app_commands_guild_only__ = guild_only
@@ -1199,18 +1357,39 @@ class Group:
     def __init__(
         self,
         *,
-        name: str = MISSING,
-        description: str = MISSING,
+        name: Union[str, locale_str] = MISSING,
+        description: Union[str, locale_str] = MISSING,
         parent: Optional[Group] = None,
         guild_ids: Optional[List[int]] = None,
         guild_only: bool = MISSING,
         nsfw: bool = MISSING,
+        auto_locale_strings: bool = False,
         default_permissions: Optional[Permissions] = MISSING,
         extras: Dict[Any, Any] = MISSING,
     ):
         cls = self.__class__
-        self.name: str = validate_name(name) if name is not MISSING else cls.__discord_app_commands_group_name__
-        self.description: str = description or cls.__discord_app_commands_group_description__
+
+        if name is MISSING:
+            name, locale = cls.__discord_app_commands_group_name__, cls.__discord_app_commands_group_locale_name__
+        elif isinstance(name, str):
+            name, locale = validate_name(name), None
+        else:
+            name, locale = validate_name(name.message), name
+        self.name: str = name
+        self._locale_name: Optional[locale_str] = locale
+
+        if description is MISSING:
+            description, locale = (
+                cls.__discord_app_commands_group_description__,
+                cls.__discord_app_commands_group_locale_description__,
+            )
+        elif isinstance(description, str):
+            description, locale = description, None
+        else:
+            description, locale = description.message, description
+        self.description: str = description
+        self._locale_description: Optional[locale_str] = locale
+
         self._attr: Optional[str] = None
         self._owner_cls: Optional[Type[Any]] = None
         self._guild_ids: Optional[List[int]] = guild_ids or getattr(cls, '__discord_app_commands_default_guilds__', None)
@@ -1273,6 +1452,17 @@ class Group:
                 raise ValueError('groups can only be nested at most one level')
             parent.add_command(self)
 
+        if auto_locale_strings:
+            self._convert_to_locale_strings()
+
+    def _convert_to_locale_strings(self) -> None:
+        if self._locale_name is None:
+            self._locale_name = locale_str(self.name)
+        if self._locale_description is None:
+            self._locale_description = locale_str(self.description)
+
+        # I don't know if propagating to the children is the right behaviour here.
+
     def __set_name__(self, owner: Type[Any], name: str) -> None:
         self._attr = name
         self.module = owner.__module__
@@ -1291,8 +1481,10 @@ class Group:
         cls = self.__class__
         copy = cls.__new__(cls)
         copy.name = self.name
+        copy._locale_name = self._locale_name
         copy._guild_ids = self._guild_ids
         copy.description = self.description
+        copy._locale_description = self._locale_description
         copy.parent = parent
         copy.module = self.module
         copy.default_permissions = self.default_permissions
@@ -1320,6 +1512,28 @@ class Group:
             setattr(parent or binding, copy._attr, copy)
 
         return copy
+
+    async def get_translated_payload(self, translator: Translator) -> Dict[str, Any]:
+        base = self.to_dict()
+        name_localizations: Dict[str, str] = {}
+        description_localizations: Dict[str, str] = {}
+        for locale in Locale:
+            if self._locale_name:
+                translation = await translator._checked_translate(self._locale_name, locale, TranslationContext.command_name)
+                if translation is not None:
+                    name_localizations[locale.value] = translation
+
+            if self._locale_description:
+                translation = await translator._checked_translate(
+                    self._locale_description, locale, TranslationContext.command_description
+                )
+                if translation is not None:
+                    description_localizations[locale.value] = translation
+
+        base['name_localizations'] = name_localizations
+        base['description_localizations'] = description_localizations
+        base['options'] = [await child.get_translated_payload(translator) for child in self._children.values()]
+        return base
 
     def to_dict(self) -> Dict[str, Any]:
         # If this has a parent command then it's part of a subcommand group
@@ -1535,24 +1749,31 @@ class Group:
     def command(
         self,
         *,
-        name: str = MISSING,
-        description: str = MISSING,
+        name: Union[str, locale_str] = MISSING,
+        description: Union[str, locale_str] = MISSING,
         nsfw: bool = False,
+        auto_locale_strings: bool = False,
         extras: Dict[Any, Any] = MISSING,
     ) -> Callable[[CommandCallback[GroupT, P, T]], Command[GroupT, P, T]]:
         """Creates an application command under this group.
 
         Parameters
         ------------
-        name: :class:`str`
+        name: Union[:class:`str`, :class:`locale_str`]
             The name of the application command. If not given, it defaults to a lower-case
             version of the callback name.
-        description: :class:`str`
+        description: Union[:class:`str`, :class:`locale_str`]
             The description of the application command. This shows up in the UI to describe
             the application command. If not given, it defaults to the first line of the docstring
             of the callback shortened to 100 characters.
         nsfw: :class:`bool`
             Whether the command is NSFW and should only work in NSFW channels. Defaults to ``False``.
+        auto_locale_strings: :class:`bool`
+            If this is set to ``True``, then all translatable strings will implicitly
+            be wrapped into :class:`locale_str` rather than :class:`str`. This could
+            avoid some repetition and be more ergonomic for certain defaults such
+            as default command names, command descriptions, and parameter names.
+            Defaults to ``False``.
         extras: :class:`dict`
             A dictionary that can be used to store extraneous data.
             The library will not touch any values or keys within this dictionary.
@@ -1576,6 +1797,7 @@ class Group:
                 callback=func,
                 nsfw=nsfw,
                 parent=self,
+                auto_locale_strings=auto_locale_strings,
                 extras=extras,
             )
             self.add_command(command)
@@ -1586,9 +1808,10 @@ class Group:
 
 def command(
     *,
-    name: str = MISSING,
-    description: str = MISSING,
+    name: Union[str, locale_str] = MISSING,
+    description: Union[str, locale_str] = MISSING,
     nsfw: bool = False,
+    auto_locale_strings: bool = False,
     extras: Dict[Any, Any] = MISSING,
 ) -> Callable[[CommandCallback[GroupT, P, T]], Command[GroupT, P, T]]:
     """Creates an application command from a regular function.
@@ -1606,6 +1829,12 @@ def command(
         Whether the command is NSFW and should only work in NSFW channels. Defaults to ``False``.
 
         Due to a Discord limitation, this does not work on subcommands.
+    auto_locale_strings: :class:`bool`
+        If this is set to ``True``, then all translatable strings will implicitly
+        be wrapped into :class:`locale_str` rather than :class:`str`. This could
+        avoid some repetition and be more ergonomic for certain defaults such
+        as default command names, command descriptions, and parameter names.
+        Defaults to ``False``.
     extras: :class:`dict`
         A dictionary that can be used to store extraneous data.
         The library will not touch any values or keys within this dictionary.
@@ -1629,6 +1858,7 @@ def command(
             callback=func,
             parent=None,
             nsfw=nsfw,
+            auto_locale_strings=auto_locale_strings,
             extras=extras,
         )
 
@@ -1637,8 +1867,9 @@ def command(
 
 def context_menu(
     *,
-    name: str = MISSING,
+    name: Union[str, locale_str] = MISSING,
     nsfw: bool = False,
+    auto_locale_strings: bool = False,
     extras: Dict[Any, Any] = MISSING,
 ) -> Callable[[ContextMenuCallback], ContextMenu]:
     """Creates an application command context menu from a regular function.
@@ -1662,7 +1893,7 @@ def context_menu(
 
     Parameters
     ------------
-    name: :class:`str`
+    name: Union[:class:`str`, :class:`locale_str`]
         The name of the context menu command. If not given, it defaults to a title-case
         version of the callback name. Note that unlike regular slash commands this can
         have spaces and upper case characters in the name.
@@ -1670,6 +1901,12 @@ def context_menu(
         Whether the command is NSFW and should only work in NSFW channels. Defaults to ``False``.
 
         Due to a Discord limitation, this does not work on subcommands.
+    auto_locale_strings: :class:`bool`
+        If this is set to ``True``, then all translatable strings will implicitly
+        be wrapped into :class:`locale_str` rather than :class:`str`. This could
+        avoid some repetition and be more ergonomic for certain defaults such
+        as default command names, command descriptions, and parameter names.
+        Defaults to ``False``.
     extras: :class:`dict`
         A dictionary that can be used to store extraneous data.
         The library will not touch any values or keys within this dictionary.
@@ -1680,12 +1917,18 @@ def context_menu(
             raise TypeError('context menu function must be a coroutine function')
 
         actual_name = func.__name__.title() if name is MISSING else name
-        return ContextMenu(name=actual_name, nsfw=nsfw, callback=func, extras=extras)
+        return ContextMenu(
+            name=actual_name,
+            nsfw=nsfw,
+            callback=func,
+            auto_locale_strings=auto_locale_strings,
+            extras=extras,
+        )
 
     return decorator
 
 
-def describe(**parameters: str) -> Callable[[T], T]:
+def describe(**parameters: Union[str, locale_str]) -> Callable[[T], T]:
     r"""Describes the given parameters by their name using the key of the keyword argument
     as the name.
 
@@ -1700,7 +1943,7 @@ def describe(**parameters: str) -> Callable[[T], T]:
 
     Parameters
     -----------
-    \*\*parameters
+    \*\*parameters: Union[:class:`str`, :class:`locale_str`]
         The description of the parameters.
 
     Raises
@@ -1723,7 +1966,7 @@ def describe(**parameters: str) -> Callable[[T], T]:
     return decorator
 
 
-def rename(**parameters: str) -> Callable[[T], T]:
+def rename(**parameters: Union[str, locale_str]) -> Callable[[T], T]:
     r"""Renames the given parameters by their name using the key of the keyword argument
     as the name.
 
@@ -1741,7 +1984,7 @@ def rename(**parameters: str) -> Callable[[T], T]:
 
     Parameters
     -----------
-    \*\*parameters
+    \*\*parameters: Union[:class:`str`, :class:`locale_str`]
         The name of the parameters.
 
     Raises

@@ -58,6 +58,7 @@ from .errors import (
     CommandLimitReached,
     MissingApplicationID,
 )
+from .translator import Translator, locale_str
 from ..errors import ClientException
 from ..enums import AppCommandType, InteractionType
 from ..utils import MISSING, _get_as_snowflake, _is_submodule
@@ -832,21 +833,22 @@ class CommandTree(Generic[ClientT]):
     def command(
         self,
         *,
-        name: str = MISSING,
-        description: str = MISSING,
+        name: Union[str, locale_str] = MISSING,
+        description: Union[str, locale_str] = MISSING,
         nsfw: bool = False,
         guild: Optional[Snowflake] = MISSING,
         guilds: Sequence[Snowflake] = MISSING,
+        auto_locale_strings: bool = False,
         extras: Dict[Any, Any] = MISSING,
     ) -> Callable[[CommandCallback[Group, P, T]], Command[Group, P, T]]:
         """Creates an application command directly under this tree.
 
         Parameters
         ------------
-        name: :class:`str`
+        name: Union[:class:`str`, :class:`locale_str`]
             The name of the application command. If not given, it defaults to a lower-case
             version of the callback name.
-        description: :class:`str`
+        description: Union[:class:`str`, :class:`locale_str`]
             The description of the application command. This shows up in the UI to describe
             the application command. If not given, it defaults to the first line of the docstring
             of the callback shortened to 100 characters.
@@ -861,6 +863,12 @@ class CommandTree(Generic[ClientT]):
             The list of guilds to add the command to. This cannot be mixed
             with the ``guild`` parameter. If no guilds are given at all
             then it becomes a global command instead.
+        auto_locale_strings: :class:`bool`
+            If this is set to ``True``, then all translatable strings will implicitly
+            be wrapped into :class:`locale_str` rather than :class:`str`. This could
+            avoid some repetition and be more ergonomic for certain defaults such
+            as default command names, command descriptions, and parameter names.
+            Defaults to ``False``.
         extras: :class:`dict`
             A dictionary that can be used to store extraneous data.
             The library will not touch any values or keys within this dictionary.
@@ -884,6 +892,7 @@ class CommandTree(Generic[ClientT]):
                 callback=func,
                 nsfw=nsfw,
                 parent=None,
+                auto_locale_strings=auto_locale_strings,
                 extras=extras,
             )
             self.add_command(command, guild=guild, guilds=guilds)
@@ -894,10 +903,11 @@ class CommandTree(Generic[ClientT]):
     def context_menu(
         self,
         *,
-        name: str = MISSING,
+        name: Union[str, locale_str] = MISSING,
         nsfw: bool = False,
         guild: Optional[Snowflake] = MISSING,
         guilds: Sequence[Snowflake] = MISSING,
+        auto_locale_strings: bool = False,
         extras: Dict[Any, Any] = MISSING,
     ) -> Callable[[ContextMenuCallback], ContextMenu]:
         """Creates an application command context menu from a regular function directly under this tree.
@@ -921,7 +931,7 @@ class CommandTree(Generic[ClientT]):
 
         Parameters
         ------------
-        name: :class:`str`
+        name: Union[:class:`str`, :class:`locale_str`]
             The name of the context menu command. If not given, it defaults to a title-case
             version of the callback name. Note that unlike regular slash commands this can
             have spaces and upper case characters in the name.
@@ -936,6 +946,12 @@ class CommandTree(Generic[ClientT]):
             The list of guilds to add the command to. This cannot be mixed
             with the ``guild`` parameter. If no guilds are given at all
             then it becomes a global command instead.
+        auto_locale_strings: :class:`bool`
+            If this is set to ``True``, then all translatable strings will implicitly
+            be wrapped into :class:`locale_str` rather than :class:`str`. This could
+            avoid some repetition and be more ergonomic for certain defaults such
+            as default command names, command descriptions, and parameter names.
+            Defaults to ``False``.
         extras: :class:`dict`
             A dictionary that can be used to store extraneous data.
             The library will not touch any values or keys within this dictionary.
@@ -946,16 +962,65 @@ class CommandTree(Generic[ClientT]):
                 raise TypeError('context menu function must be a coroutine function')
 
             actual_name = func.__name__.title() if name is MISSING else name
-            context_menu = ContextMenu(name=actual_name, nsfw=nsfw, callback=func, extras=extras)
+            context_menu = ContextMenu(
+                name=actual_name,
+                nsfw=nsfw,
+                callback=func,
+                auto_locale_strings=auto_locale_strings,
+                extras=extras,
+            )
             self.add_command(context_menu, guild=guild, guilds=guilds)
             return context_menu
 
         return decorator
 
+    @property
+    def translator(self) -> Optional[Translator]:
+        """Optional[:class:`Translator`]: The translator, if any, responsible for handling translation of commands.
+
+        To change the translator, use :meth:`set_translator`.
+        """
+        return self._state._translator
+
+    async def set_translator(self, translator: Optional[Translator]) -> None:
+        """Sets the translator to use for translating commands.
+
+        If a translator was previously set, it will be unloaded using its
+        :meth:`Translator.unload` method.
+
+        When a translator is set, it will be loaded using its :meth:`Translator.load` method.
+
+        Parameters
+        ------------
+        translator: Optional[:class:`Translator`]
+            The translator to use. If ``None`` then the translator is just removed and unloaded.
+
+        Raises
+        -------
+        TypeError
+            The translator was not ``None`` or a :class:`Translator` instance.
+        """
+
+        if translator is not None and not isinstance(translator, Translator):
+            raise TypeError(f'expected None or Translator instance, received {translator.__class__!r} instead')
+
+        old_translator = self._state._translator
+        if old_translator is not None:
+            await old_translator.unload()
+
+        if translator is None:
+            self._state._translator = None
+        else:
+            await translator.load()
+            self._state._translator = translator
+
     async def sync(self, *, guild: Optional[Snowflake] = None) -> List[AppCommand]:
         """|coro|
 
         Syncs the application commands to Discord.
+
+        This also runs the translator to get the translated strings necessary for
+        feeding back into Discord.
 
         This must be called for the application commands to show up.
 
@@ -973,6 +1038,8 @@ class CommandTree(Generic[ClientT]):
             The client does not have the ``applications.commands`` scope in the guild.
         MissingApplicationID
             The client does not have an application ID.
+        TranslationError
+            An error occurred while translating the commands.
 
         Returns
         --------
@@ -984,7 +1051,13 @@ class CommandTree(Generic[ClientT]):
             raise MissingApplicationID
 
         commands = self._get_all_commands(guild=guild)
-        payload = [command.to_dict() for command in commands]
+
+        translator = self.translator
+        if translator:
+            payload = [await command.get_translated_payload(translator) for command in commands]
+        else:
+            payload = [command.to_dict() for command in commands]
+
         if guild is None:
             data = await self._http.bulk_upsert_global_commands(self.client.application_id, payload=payload)
         else:

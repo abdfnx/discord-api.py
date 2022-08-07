@@ -970,6 +970,16 @@ The library now provides a default logging configuration if using :meth:`Client.
 
 For more information, check :doc:`logging`.
 
+Text in Voice
+---------------
+
+In order to support text in voice functionality, a few changes had to be made:
+
+- :class:`VoiceChannel` is now :class:`abc.Messageable` so it can have messages sent and received.
+- :attr:`Message.channel` can now be :class:`VoiceChannel`.
+
+In the future this may include :class:`StageChannel` when Discord implements it.
+
 Removal of ``StoreChannel``
 -----------------------------
 
@@ -1109,6 +1119,7 @@ The following changes have been made:
 - :attr:`AuditLogEntry.target` may now be a :class:`PartialMessageable`.
 - :attr:`PartialMessage.channel` may now be a :class:`PartialMessageable`.
 - :attr:`Guild.preferred_locale` is now of type :class:`Locale`.
+- :attr:`abc.GuildChannel.overwrites` keys can now have :class:`Object` in them.
 
 Removals
 ----------
