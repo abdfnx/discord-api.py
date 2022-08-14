@@ -435,6 +435,7 @@ Button
     :inherited-members:
 
 .. autofunction:: discord.ui.button
+    :decorator:
 
 Select
 ~~~~~~~
@@ -446,6 +447,7 @@ Select
     :inherited-members:
 
 .. autofunction:: discord.ui.select
+    :decorator:
 
 TextInput
 ~~~~~~~~~~
@@ -719,6 +721,9 @@ Exceptions
 .. autoexception:: discord.app_commands.MissingApplicationID
     :members:
 
+.. autoexception:: discord.app_commands.CommandSyncFailure
+    :members:
+
 Exception Hierarchy
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -741,3 +746,6 @@ Exception Hierarchy
             - :exc:`~discord.app_commands.CommandSignatureMismatch`
             - :exc:`~discord.app_commands.CommandNotFound`
             - :exc:`~discord.app_commands.MissingApplicationID`
+            - :exc:`~discord.app_commands.CommandSyncFailure`
+        - :exc:`~discord.HTTPException`
+            - :exc:`~discord.app_commands.CommandSyncFailure`
