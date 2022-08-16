@@ -52,7 +52,7 @@ from ..enums import AppCommandOptionType, AppCommandType, ChannelType, Locale
 from .models import Choice
 from .transformers import annotation_to_parameter, CommandParameter, NoneType
 from .errors import AppCommandError, CheckFailure, CommandInvokeError, CommandSignatureMismatch, CommandAlreadyRegistered
-from .translator import TranslationContext, TranslationContextLocation, Translator, locale_str
+from .translator import TranslationContextLocation, TranslationContext, Translator, locale_str
 from ..message import Message
 from ..user import User
 from ..member import Member
@@ -513,6 +513,10 @@ class Parameter:
         return self.__parent.display_name
 
     @property
+    def required(self) -> bool:
+        return self.__parent.required
+
+    @property
     def description(self) -> str:
         return str(self.__parent.description)
 
@@ -917,6 +921,19 @@ class Command(Generic[GroupT, P, T]):
 
     def _get_internal_command(self, name: str) -> Optional[Union[Command, Group]]:
         return None
+
+    @property
+    def parameters(self) -> List[Parameter]:
+        """Returns a list of parameters for this command.
+
+        This does not include the ``self`` or ``interaction`` parameters.
+
+        Returns
+        --------
+        List[:class:`Parameter`]
+            The parameters of this command.
+        """
+        return [Parameter(p, self) for p in self._params.values()]
 
     def get_parameter(self, name: str) -> Optional[Parameter]:
         """Retrieves a parameter by its name.
